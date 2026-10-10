@@ -1,0 +1,25 @@
+# build
+/build/
+/out/
+/cmake-build-*/
+CMakeUserPresets.json
+compile_commands.json
+
+# dataset (mounted as a volume, never committed)
+/data/*
+!/data/.gitkeep
+
+# local config
+.env
+
+# IDE and OS
+.vs/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# python
+__pycache__/
+*.pyc
