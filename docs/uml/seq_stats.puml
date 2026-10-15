@@ -1,0 +1,33 @@
+@startuml seq_stats
+' UC5. Переглянути статистику. Модель до реалізації: див. docs/PLAN.md, розділ 4.4.
+autonumber
+hide footbox
+
+title UC5. Перегляд статистики (GET /api/stats)
+
+actor "Клієнт" as Client
+participant "RestHandlers\n(воркер пулу запитів)" as Rest
+participant "IndexHolder" as Holder
+participant "snapshot :\nInvertedIndex" as Index
+
+Client -> Rest : GET /api/stats
+activate Rest
+Rest -> Holder : Get()
+note right : копія shared_ptr під м'ютексом
+Holder --> Rest : snapshot
+
+alt індекс ще не будувався
+  Rest --> Client : 200 {"documents": 0, "index_build_time_ms": 0, "threads_used": 0}
+else індекс опубліковано
+  Rest -> Index : stats()
+  Index --> Rest : IndexStats (незмінний знімок)
+  Rest --> Client : 200 {"documents": N, "index_build_time_ms": T, "threads_used": P}
+end
+deactivate Rest
+
+note over Client, Index
+  Статистика зберігається в опублікованому об'єкті індексу,
+  тому вона завжди відповідає тому індексу, за яким іде пошук.
+end note
+
+@enduml
