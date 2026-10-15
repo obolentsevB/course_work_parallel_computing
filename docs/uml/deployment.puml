@@ -1,0 +1,52 @@
+@startuml deployment
+' Діаграма розгортання (топологія Docker Compose). Модель до реалізації: див. docs/PLAN.md, розділ 4.1.
+
+title Розгортання: docker compose up
+
+node "Комп'ютер (хост)" as Host {
+
+  node "Браузер" as Browser {
+    artifact "Web UI\n(HTML + JS)" as WebUI
+  }
+
+  node "Термінал" as Terminal {
+    artifact "./search\n(CLI)" as Cli
+  }
+
+  folder "./data\n(датасет, поза git)" as DataDir
+
+  node "Docker Engine" as Docker {
+
+    node "server" <<container>> as Server {
+      artifact "server\n(C++20)" as ServerBin
+      artifact "search\n(CLI)" as ServerCli
+      folder "/app/web" as WebDir
+    }
+
+    node "ollama" <<container>> as OllamaC {
+      component "Ollama\n:11434\nOLLAMA_NUM_PARALLEL=1" as OllamaSvc
+    }
+
+    node "ollama-init" <<container, одноразовий>> as Init {
+      component "ollama pull\n$OLLAMA_MODEL" as Pull
+    }
+
+    database "том ollama_models" as Models
+  }
+}
+
+WebUI --> ServerBin : HTTP і WebSocket\nlocalhost:8080
+Cli --> ServerBin : HTTP\nlocalhost:8080
+ServerBin --> OllamaSvc : HTTP\nollama:11434\n(мережа compose)
+Pull --> OllamaSvc : HTTP /api/pull
+OllamaSvc --> Models : /root/.ollama
+ServerBin --> DataDir : /data (лише читання)
+ServerBin --> WebDir : статичні файли
+
+legend bottom left
+  ollama-init стартує, коли ollama здорова (перевірка: ollama list), завантажує модель і завершується.
+  server залежить від ollama лише умовою "запущено": /api/health відповідає 200 одразу, поки модель ще завантажується.
+  GPU вмикається окремим файлом docker-compose.gpu.yml; основний compose працює без GPU.
+endlegend
+
+@enduml
