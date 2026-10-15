@@ -1,0 +1,50 @@
+@startuml use_case
+' Діаграма варіантів використання. Модель до реалізації: див. docs/PLAN.md, розділи 3-4.
+left to right direction
+skinparam packageStyle rectangle
+
+title Варіанти використання пошукової системи
+
+actor "Користувач\nWeb UI" as WebUser
+actor "Користувач\nCLI" as CliUser
+actor "Адміністратор /\nавтоперевірка" as Admin
+actor "Ollama" as Ollama <<зовнішня система>>
+
+rectangle "Пошукова система" {
+  usecase "UC1. Побудувати індекс" as UC1
+  usecase "UC2. Пошук за ключовими\nсловами (REST)" as UC2
+  usecase "UC3. Пошук із розширенням\nзапиту (WebSocket)" as UC3
+  usecase "UC4. Перевірити стан" as UC4
+  usecase "UC5. Переглянути статистику" as UC5
+}
+
+Admin --> UC1
+Admin --> UC2
+Admin --> UC4
+Admin --> UC5
+
+WebUser --> UC1
+WebUser --> UC3
+WebUser --> UC4
+WebUser --> UC5
+
+CliUser --> UC2
+CliUser --> UC3
+
+UC3 ..> UC2 : <<include>>
+
+UC3 --> Ollama
+UC4 --> Ollama
+
+note right of UC3
+  Якщо Ollama недоступна або вийшов
+  тайм-аут, пошук іде за початковими
+  термами (expanded_terms = []).
+end note
+
+note right of UC4
+  Завжди 200; поле "ollama"
+  показує доступність моделі.
+end note
+
+@enduml
