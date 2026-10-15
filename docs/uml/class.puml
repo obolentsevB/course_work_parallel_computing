@@ -1,0 +1,301 @@
+@startuml class
+' Діаграма класів. Модель до реалізації: див. docs/PLAN.md, розділ 5.
+' Назви й сигнатури можуть змінитися під час реалізації; синхронізація на етапі 12.
+skinparam classAttributeIconSize 0
+skinparam packageStyle folder
+hide empty members
+
+title Діаграма класів пошукового сервера
+
+package "concurrency" {
+  class ThreadPool {
+    - workers_ : vector<thread>
+    - tasks_ : deque<function<void()>>
+    - mutex_ : mutex
+    - cv_ : condition_variable
+    - stopping_ : bool
+    + ThreadPool(workers : size_t)
+    + Submit(task : function<void()>) : bool
+    + Shutdown() : void
+    + worker_count() : size_t
+    + queue_size() : size_t
+    - WorkerLoop() : void
+  }
+
+  class WaitGroup {
+    - mutex_ : mutex
+    - cv_ : condition_variable
+    - count_ : size_t
+    + Add(n : size_t) : void
+    + Done() : void
+    + Wait() : void
+  }
+}
+
+package "text" {
+  class Tokenizer <<utility>> {
+    + {static} Tokenize(text : string_view, on_token : F) : void
+    + {static} IsStopWord(token : string_view) : bool
+  }
+}
+
+package "index" {
+  class "ConcurrentHashMap<V>" as ConcurrentHashMap {
+    - segments_ : vector<Segment>
+    + ConcurrentHashMap(segments : size_t, capacity : size_t)
+    + Upsert(key : string_view, fn : F) : void
+    + Find(key : string_view, fn : F) : bool
+    + ForEachInSegment(segment : size_t, fn : F) : void
+    + Size() : size_t
+    + segment_count() : size_t
+  }
+
+  class Segment <<alignas(64)>> {
+    - mutex : shared_mutex
+    - slots : vector<Slot>
+    - size : size_t
+    - Grow() : void
+  }
+
+  class Posting <<struct>> {
+    + doc : uint32_t
+    + tf : uint32_t
+  }
+
+  class DocInfo <<struct>> {
+    + rel_path : string
+    + length_tokens : uint32_t
+  }
+
+  class DocumentStore {
+    - docs_ : vector<DocInfo>
+    + Resize(n : size_t) : void
+    + Set(doc : uint32_t, info : DocInfo) : void
+    + Get(doc : uint32_t) : const DocInfo&
+    + size() : size_t
+  }
+
+  class IndexStats <<struct>> {
+    + documents : size_t
+    + build_time_ms : int64_t
+    + threads_used : size_t
+  }
+
+  class InvertedIndex {
+    - terms_ : ConcurrentHashMap<vector<Posting>>
+    - docs_ : DocumentStore
+    - total_tokens_ : atomic<uint64_t>
+    - avg_doc_length_ : double
+    - stats_ : IndexStats
+    + AddDocument(doc : uint32_t, term_freqs) : void
+    + Finalize(pool : ThreadPool&) : void
+    + Lookup(term : string_view, fn : F) : bool
+    + doc_count() : size_t
+    + avg_doc_length() : double
+    + stats() : IndexStats
+  }
+
+  class IndexHolder {
+    - mutex_ : mutex
+    - current_ : shared_ptr<const InvertedIndex>
+    + Get() : shared_ptr<const InvertedIndex>
+    + Publish(index : shared_ptr<const InvertedIndex>) : void
+  }
+
+  class IndexBuilder {
+    - data_dir_ : path
+    - segments_ : size_t
+    - batch_docs_ : size_t
+    + Build(threads : size_t) : shared_ptr<InvertedIndex>
+    - ScanFiles() : vector<string>
+    - ProcessBatch(first : size_t, last : size_t) : void
+  }
+}
+
+package "search" {
+  class WeightedTerm <<struct>> {
+    + term : string
+    + weight : double
+  }
+
+  class Hit <<struct>> {
+    + doc : uint32_t
+    + score : double
+  }
+
+  class Searcher {
+    - k1_ : double = 1.2
+    - b_ : double = 0.75
+    + Search(index, terms : vector<WeightedTerm>, k : size_t) : vector<Hit>
+  }
+
+  class SnippetExtractor {
+    - data_dir_ : path
+    - radius_ : size_t
+    + Extract(rel_path : string, terms : vector<string>) : string
+  }
+
+  class QueryExpander {
+    - max_terms_ : size_t
+    + Expand(query : string, deadline) : vector<string>
+    - BuildPrompt(query : string) : string
+    - Sanitize(raw : string, original) : vector<string>
+  }
+}
+
+package "llm" {
+  class OllamaClient {
+    - url_ : string
+    - model_ : string
+    - queue_ : deque<shared_ptr<Job>>
+    - mutex_ : mutex
+    - cv_ : condition_variable
+    - worker_ : thread
+    - max_queue_ : size_t
+    - available_cache_ : bool
+    - checked_at_ : time_point
+    + Generate(prompt : string, deadline) : optional<string>
+    + IsAvailable() : bool
+    + queue_length() : size_t
+    - WorkerLoop() : void
+    - Warmup() : void
+  }
+
+  class Job {
+    + prompt : string
+    + deadline : time_point
+    + state : JobState
+    + result : optional<string>
+    + mutex : mutex
+    + cv : condition_variable
+  }
+
+  enum JobState {
+    Pending
+    Running
+    Done
+    Cancelled
+  }
+}
+
+package "api" {
+  class HttpServer {
+    - server_ : httplib::Server
+    + Run(port : int) : void
+    + Stop() : void
+  }
+
+  class PoolTaskQueue {
+    - pool_ : ThreadPool
+    + enqueue(fn : function<void()>) : bool
+    + shutdown() : void
+  }
+
+  class RestHandlers {
+    - build_mutex_ : mutex
+    + Health(req, res) : void
+    + Index(req, res) : void
+    + Search(req, res) : void
+    + Stats(req, res) : void
+  }
+
+  class WsSearchHandler {
+    + Handle(req, ws : WebSocket&) : void
+  }
+
+  class JsonDto <<utility>> {
+    + {static} HealthJson(ollama : bool)
+    + {static} IndexJson(documents, time_ms)
+    + {static} SearchJson(results, time_ms)
+    + {static} StatsJson(stats : IndexStats)
+    + {static} StageJson(stage, data)
+  }
+}
+
+package "app" {
+  class Config {
+    + data_dir : string
+    + http_threads : size_t
+    + index_segments : size_t
+    + ollama_url : string
+    + ollama_model : string
+    + ollama_timeout_ms : int
+    + {static} FromEnv() : Config
+  }
+}
+
+package "cli" {
+  class SearchCli {
+    + Run(argc : int, argv) : int
+    - SearchRest(query : string) : int
+    - SearchWebSocket(query : string) : int
+  }
+}
+
+package "cpp-httplib (стороння)" <<external>> {
+  abstract class "httplib::TaskQueue" as TaskQueue {
+    + {abstract} enqueue(fn) : bool
+    + {abstract} shutdown() : void
+  }
+  class "httplib::Server" as HServer
+  class "httplib::Client" as HClient
+  class "httplib::ws::WebSocketClient" as HWsClient
+}
+
+package "nlohmann/json (стороння)" <<external>> {
+  class "nlohmann::ordered_json" as OJson
+}
+
+' ---- зв'язки ----
+ConcurrentHashMap *-- "S" Segment
+InvertedIndex *-- ConcurrentHashMap
+InvertedIndex *-- DocumentStore
+InvertedIndex *-- IndexStats
+InvertedIndex ..> Posting
+DocumentStore *-- "N" DocInfo
+InvertedIndex ..> ThreadPool : Finalize
+IndexHolder o-- "0..1" InvertedIndex
+
+IndexBuilder ..> ThreadPool : створює на час побудови
+IndexBuilder ..> WaitGroup
+IndexBuilder ..> Tokenizer
+IndexBuilder ..> InvertedIndex : створює
+
+Searcher ..> InvertedIndex
+Searcher ..> WeightedTerm
+Searcher ..> Hit
+SnippetExtractor ..> Tokenizer
+QueryExpander --> OllamaClient
+QueryExpander ..> Tokenizer
+
+OllamaClient *-- "0..*" Job
+Job --> JobState
+OllamaClient ..> HClient
+
+PoolTaskQueue --|> TaskQueue
+PoolTaskQueue *-- ThreadPool : пул запитів
+HttpServer *-- HServer
+HServer o-- PoolTaskQueue : new_task_queue
+HttpServer --> RestHandlers
+HttpServer --> WsSearchHandler
+
+RestHandlers --> IndexHolder
+RestHandlers --> IndexBuilder
+RestHandlers --> Searcher
+RestHandlers --> SnippetExtractor
+RestHandlers --> OllamaClient : IsAvailable
+RestHandlers ..> JsonDto
+
+WsSearchHandler --> QueryExpander
+WsSearchHandler --> IndexHolder
+WsSearchHandler --> Searcher
+WsSearchHandler --> SnippetExtractor
+WsSearchHandler ..> JsonDto
+
+JsonDto ..> OJson
+HttpServer ..> Config
+
+SearchCli ..> HClient
+SearchCli ..> HWsClient
+
+@enduml
