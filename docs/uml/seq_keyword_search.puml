@@ -1,0 +1,67 @@
+@startuml seq_keyword_search
+' UC2. Пошук за ключовими словами (REST). Модель до реалізації: див. docs/PLAN.md, розділи 3, 4.2, 5.6.
+autonumber
+hide footbox
+
+title UC2. Пошук за ключовими словами (POST /api/search)
+
+actor "Клієнт\n(CLI, автоперевірка)" as Client
+participant "httplib::Server\n(головний потік)" as Server
+participant "PoolTaskQueue" as Queue
+participant "Воркер пулу\nзапитів" as Worker
+participant "RestHandlers" as Rest
+participant "IndexHolder" as Holder
+participant "Tokenizer" as Tok
+participant "Searcher" as Searcher
+participant "snapshot :\nInvertedIndex" as Index
+participant "SnippetExtractor" as Snip
+database "Том /data" as Data
+
+Client -> Server : TCP-з'єднання, POST /api/search\n{"query": "...", "mode": "keyword"}
+Server -> Queue : enqueue(обробка з'єднання)
+Queue -> Worker : задача з черги ThreadPool
+activate Worker
+Worker -> Rest : Search(req, res)
+activate Rest
+
+alt mode невідомий або query некоректний
+  Rest --> Client : 400 {"status": "error", "message": ...}
+else запит коректний
+  Rest -> Holder : Get()
+  Holder --> Rest : snapshot (shared_ptr)
+
+  alt індекс ще не збудований або запит порожній
+    Rest --> Client : 200 {"results": [], "time_ms": T}
+  else
+    Rest -> Tok : Tokenize(query)
+    Tok --> Rest : терми (вага 1.0)
+    Rest -> Searcher : Search(snapshot, terms, K)
+    activate Searcher
+    loop для кожного терма запиту
+      Searcher -> Index : Lookup(term)
+      note right : спільне блокування\nсегмента на читання
+      Index --> Searcher : список {doc, tf}
+      Searcher -> Searcher : накопичити BM25
+    end
+    Searcher -> Searcher : топ-K (за спаданням score,\nпри рівності за doc_id)
+    Searcher --> Rest : hits
+    deactivate Searcher
+
+    loop для кожного з топ-K
+      Rest -> Snip : Extract(rel_path, terms)
+      Snip -> Data : прочитати файл документа
+      Snip --> Rest : сніпет (коректний UTF-8)
+    end
+
+    Rest --> Client : 200 {"results": [{"doc_id", "score", "snippet"}], "time_ms": T}
+  end
+end
+deactivate Rest
+deactivate Worker
+
+note over Client, Rest
+  LLM у цьому варіанті не викликається.
+  Кілька клієнтів обслуговуються одночасно різними воркерами пулу.
+end note
+
+@enduml
