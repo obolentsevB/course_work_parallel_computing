@@ -1,0 +1,78 @@
+@startuml seq_build_index
+' UC1. Побудувати індекс. Модель до реалізації: див. docs/PLAN.md, розділи 4.3, 5.1-5.5.
+autonumber
+hide footbox
+
+title UC1. Побудова індексу (POST /api/index)
+
+actor "Клієнт" as Client
+participant "RestHandlers" as Rest
+participant "IndexBuilder" as Builder
+participant "pool : ThreadPool\n(threads воркерів)" as Pool
+participant "wg : WaitGroup" as WG
+participant "Воркер пулу\n(×threads)" as Worker
+participant "index : InvertedIndex" as Index
+participant "terms : ConcurrentHashMap" as Map
+participant "IndexHolder" as Holder
+database "Том /data" as Data
+
+Client -> Rest : POST /api/index {"threads": N}
+activate Rest
+
+alt threads некоректний
+  Rest --> Client : 400 {"status": "error", "message": ...}
+else threads коректний або відсутній
+  Rest -> Rest : lock(build_mutex_)
+  note right : одночасні побудови\nвиконуються по черзі
+
+  Rest -> Builder : Build(N)
+  activate Builder
+  Builder -> Data : рекурсивний обхід, відбір *.txt
+  Builder -> Builder : сортування шляхів, doc_id = індекс у списку
+  Builder -> Index ** : створити(segments, кількість документів)
+  Builder -> Pool ** : ThreadPool(N)
+
+  loop для кожного пакета з INDEX_BATCH_DOCS документів
+    Builder -> WG : Add(1)
+    Builder -> Pool : Submit(ProcessBatch)
+  end
+
+  Builder -> WG : Wait()
+  activate WG
+
+  par паралельно в N воркерах
+    Pool -> Worker : виконати задачу пакета
+    activate Worker
+    loop для кожного документа пакета
+      Worker -> Data : прочитати файл
+      Worker -> Worker : Tokenize → локальна таблиця терм → tf\n(без блокувань, стек і купа воркера)
+      Worker -> Index : DocumentStore.Set(doc, length)
+      note right : кожен воркер пише лише\nу свої елементи: блокування не потрібне
+      loop для кожного унікального терма документа
+        Worker -> Map : Upsert(term, push_back {doc, tf})
+        note right : ексклюзивне блокування\nодного сегмента
+      end
+    end
+    Worker -> Index : total_tokens_.fetch_add(...)
+    Worker -> WG : Done()
+    deactivate Worker
+  end
+
+  WG --> Builder : усі пакети оброблено
+  deactivate WG
+
+  Builder -> Index : Finalize(pool)
+  note right : сортування списків за doc\nпаралельно по сегментах
+  Builder -> Pool : Shutdown()
+  destroy Pool
+  Builder --> Rest : index
+  deactivate Builder
+
+  Rest -> Holder : Publish(index)
+  note right : підміна shared_ptr під м'ютексом;\nпошуки зі старим знімком дороблюють\nна старому індексі
+  Rest -> Rest : unlock(build_mutex_)
+  Rest --> Client : 200 {"status": "ok", "documents_indexed": N, "time_ms": T}
+end
+deactivate Rest
+
+@enduml
