@@ -1,0 +1,74 @@
+@startuml seq_ws_search
+' UC3. Пошук із розширенням запиту (WebSocket). Модель до реалізації: див. docs/PLAN.md, розділи 3.2, 5.7.
+autonumber
+hide footbox
+
+title UC3. Пошук із розширенням запиту (/ws/search)
+
+actor "Користувач" as User
+participant "Web UI / CLI\n(клієнт WebSocket)" as UI
+participant "WsSearchHandler\n(воркер пулу запитів)" as Ws
+participant "QueryExpander" as Exp
+participant "OllamaClient" as OC
+participant "Потік Ollama" as OT
+participant "Searcher,\nSnippetExtractor" as Search
+participant "Ollama" as Ollama
+
+User -> UI : ввести запит
+UI -> Ws : HTTP Upgrade /ws/search
+note right : з'єднання займає один воркер\nпулу на весь час життя
+UI -> Ws : {"query": "..."}
+activate Ws
+
+Ws -> Exp : Expand(query, deadline)
+activate Exp
+Exp -> OC : IsAvailable()
+note right : кеш на OLLAMA_HEALTH_TTL_MS
+
+alt Ollama недоступна
+  OC --> Exp : false
+  Exp --> Ws : [] (запасний шлях)
+else Ollama доступна
+  OC --> Exp : true
+  Exp -> OC : Generate(prompt, deadline)
+  activate OC
+
+  alt черга заповнена (OLLAMA_MAX_QUEUE)
+    OC --> Exp : nullopt
+  else є місце
+    OC -> OC : поставити Job у FIFO,\nnotify потоку Ollama
+    OC -> OC : чекати на job.cv до deadline
+    OT -> OC : взяти наступний Job
+    activate OT
+    OT -> Ollama : POST /api/generate\n{stream: false, format: схема JSON,\noptions: {temperature: 0}}
+    note right : у Ollama щонайбільше\nодин наш запит
+
+    alt відповідь до дедлайну
+      Ollama --> OT : {"response": "{\"terms\": [...]}"}
+      OT -> OC : job.state = Done, notify
+      OC --> Exp : текст відповіді
+    else дедлайн минув
+      OC -> OC : job.state = Cancelled
+      OC --> Exp : nullopt
+      note right : потік Ollama відкине\nрезультат скасованого Job
+    end
+    deactivate OT
+  end
+  deactivate OC
+
+  Exp -> Exp : розібрати JSON, Tokenize кожен терм,\nприбрати початкові, стоп-слова, дублікати,\nобрізати до MAX_EXPANDED_TERMS
+  Exp --> Ws : expanded_terms (або [] при помилці)
+end
+deactivate Exp
+
+Ws -> UI : {"stage": "query_expansion",\n"data": {"original": "...", "expanded_terms": [...]}}
+
+Ws -> Search : Search(snapshot, початкові (1.0) +\nдодані (EXPANSION_WEIGHT), K) і сніпети
+Search --> Ws : results
+Ws -> UI : {"stage": "keyword_search",\n"data": {"results": [...], "time_ms": T}}
+Ws -> UI : {"stage": "done"}
+deactivate Ws
+
+UI -> User : показати етапи і результати
+
+@enduml
