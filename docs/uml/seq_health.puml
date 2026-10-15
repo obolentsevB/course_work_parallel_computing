@@ -1,0 +1,44 @@
+@startuml seq_health
+' UC4. Перевірити стан. Модель до реалізації: див. docs/PLAN.md, розділи 3.3, 5.7.
+autonumber
+hide footbox
+
+title UC4. Перевірка стану (GET /api/health)
+
+actor "Клієнт" as Client
+participant "RestHandlers\n(воркер пулу запитів)" as Rest
+participant "OllamaClient" as OC
+participant "Ollama" as Ollama
+
+Client -> Rest : GET /api/health
+activate Rest
+Rest -> OC : IsAvailable()
+activate OC
+
+alt кеш свіжий (молодший за OLLAMA_HEALTH_TTL_MS)
+  OC --> Rest : збережене значення
+else кеш застарів
+  OC -> Ollama : GET /api/tags (короткий тайм-аут)
+  alt відповідь отримано
+    Ollama --> OC : список моделей
+    OC -> OC : available = OLLAMA_MODEL є у списку
+  else помилка з'єднання або тайм-аут
+    OC -> OC : available = false
+  end
+  OC -> OC : оновити кеш під м'ютексом
+  opt Ollama стала доступною вперше
+    OC -> OC : поставити Job прогріву моделі в чергу
+  end
+  OC --> Rest : available
+end
+deactivate OC
+
+Rest --> Client : 200 {"status": "ok", "ollama": true | false}
+deactivate Rest
+
+note over Client, Ollama
+  Відповідь завжди 200, навіть коли Ollama недоступна або модель ще завантажується.
+  Перевірка не проходить через чергу генерації, тому не чекає на довгі запити до LLM.
+end note
+
+@enduml
