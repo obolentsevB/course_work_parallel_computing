@@ -26,6 +26,12 @@ fetch_header(https://raw.githubusercontent.com/nlohmann/json/v3.12.0/single_incl
 
 find_package(Threads REQUIRED)
 
+add_library(search_core STATIC
+  src/api/http_server.cpp
+)
+target_include_directories(search_core PUBLIC src ${DEPS_DIR})
+target_link_libraries(search_core PUBLIC Threads::Threads)
+target_compile_options(search_core PUBLIC -Wall -Wextra)
+
 add_executable(server src/main.cpp)
-target_include_directories(server PRIVATE ${DEPS_DIR})
-target_link_libraries(server PRIVATE Threads::Threads)
+target_link_libraries(server PRIVATE search_core)
