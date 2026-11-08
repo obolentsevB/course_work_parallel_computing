@@ -1,6 +1,10 @@
-#include <iostream>
 #include "api/http_server.h"
+
+#include <chrono>
+#include <iostream>
+
 #include "api/json_dto.h"
+#include "concurrency/thread_pool.h"
 
 namespace api {
 
@@ -12,6 +16,19 @@ void SendJson(httplib::Response& res, const Json& body, int status = 200) {
   res.status = status;
   res.set_content(body.dump(), "application/json");
 }
+
+// cpp-httplib asks a TaskQueue to run each accepted connection.
+// We hand connections to our own ThreadPool, so N connections are served by
+// N worker threads in parallel.
+class PoolTaskQueue : public httplib::TaskQueue {
+ public:
+  explicit PoolTaskQueue(size_t threads) : pool_(threads) {}
+  bool enqueue(std::function<void()> fn) override { return pool_.Submit(std::move(fn)); }
+  void shutdown() override { pool_.Shutdown(); }
+
+ private:
+  concurrency::ThreadPool pool_;
+};
 
 class RestHandlers {
  public:
@@ -30,6 +47,8 @@ class RestHandlers {
 Services::Services(const app::Config& c) : config(c) {}
 
 HttpServer::HttpServer(const app::Config& config) : services_(std::make_unique<Services>(config)) {
+  const size_t threads = config.http_threads;
+  server_.new_task_queue = [threads] { return new PoolTaskQueue(threads); };
   RegisterRoutes();
 }
 
@@ -42,8 +61,9 @@ void HttpServer::RegisterRoutes() {
 
 bool HttpServer::Run() {
   const auto& c = services_->config;
-  std::cout << "listening on :" << c.port << " (data: " << c.data_dir
-            << ", ollama: " << c.ollama_url << " " << c.ollama_model << ")" << std::endl;
+  std::cout << "listening on :" << c.port << " (http threads: " << c.http_threads
+            << ", data: " << c.data_dir << ", ollama: " << c.ollama_url << " " << c.ollama_model
+            << ")" << std::endl;
   return server_.listen("0.0.0.0", c.port);
 }
 

@@ -2,6 +2,7 @@
 
 #include <httplib.h>
 #include <memory>
+
 #include "app/config.h"
 
 namespace api {
@@ -13,7 +14,8 @@ struct Services {
   app::Config config;
 };
 
-// REST server.
+// REST server. Connections are served by our own ThreadPool
+// (plugged into cpp-httplib through PoolTaskQueue).
 class HttpServer {
  public:
   explicit HttpServer(const app::Config& config);
