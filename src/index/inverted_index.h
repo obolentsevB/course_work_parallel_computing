@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -74,6 +76,24 @@ class InvertedIndex {
   std::atomic<uint64_t> total_tokens_{0};
   double avg_doc_length_ = 0;
   IndexStats stats_;
+};
+
+// Holds the currently published index. Searches take a snapshot (copy of the
+// shared_ptr) and keep using it even if a rebuild publishes a new index.
+class IndexHolder {
+ public:
+  std::shared_ptr<const InvertedIndex> Get() const {
+    std::lock_guard lock(mutex_);
+    return current_;
+  }
+  void Publish(std::shared_ptr<const InvertedIndex> index) {
+    std::lock_guard lock(mutex_);
+    current_ = std::move(index);
+  }
+
+ private:
+  mutable std::mutex mutex_;
+  std::shared_ptr<const InvertedIndex> current_;
 };
 
 }  // namespace indexing
