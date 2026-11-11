@@ -28,6 +28,7 @@ find_package(Threads REQUIRED)
 
 add_library(search_core STATIC
   src/concurrency/thread_pool.cpp
+  src/index/inverted_index.cpp
   src/api/http_server.cpp
 )
 target_include_directories(search_core PUBLIC src ${DEPS_DIR})
