@@ -38,13 +38,42 @@ class RestHandlers {
     SendJson(res, dto::Health(false));
   }
 
+  void Index(const httplib::Request& req, httplib::Response& res) {
+    size_t threads = s_.config.default_threads;
+    if (!req.body.empty()) {
+      const Json body = Json::parse(req.body, nullptr, false);
+      if (!body.is_object()) return SendJson(res, dto::Error("body must be a JSON object"), 400);
+      if (body.contains("threads")) {
+        const auto& t = body["threads"];
+        if (!t.is_number_integer() || t.get<int64_t>() < 1 || t.get<int64_t>() > 256) {
+          return SendJson(res, dto::Error("threads must be an integer in [1, 256]"), 400);
+        }
+        threads = t.get<size_t>();
+      }
+    }
+
+    std::lock_guard lock(s_.build_mutex);
+    std::shared_ptr<const indexing::InvertedIndex> index = s_.builder.Build(threads);
+    s_.holder.Publish(index);
+    const auto& st = index->stats();
+    std::cout << "index built: " << st.documents << " docs, " << index->term_count() << " terms, "
+              << st.build_time_ms << " ms, " << st.threads_used << " threads" << std::endl;
+    SendJson(res, dto::Index(st.documents, st.build_time_ms));
+  }
+
+  void Stats(const httplib::Request&, httplib::Response& res) {
+    auto index = s_.holder.Get();
+    SendJson(res, dto::Stats(index ? index->stats() : indexing::IndexStats{}));
+  }
+
  private:
   Services& s_;
 };
 
 }  // namespace
 
-Services::Services(const app::Config& c) : config(c) {}
+Services::Services(const app::Config& c)
+    : config(c), builder(c.data_dir, c.index_segments, c.index_batch_docs) {}
 
 HttpServer::HttpServer(const app::Config& config) : services_(std::make_unique<Services>(config)) {
   const size_t threads = config.http_threads;
@@ -57,6 +86,8 @@ void HttpServer::RegisterRoutes() {
   auto rest = std::make_shared<RestHandlers>(*services_);
 
   server_.Get("/api/health", [rest](auto& req, auto& res) { rest->Health(req, res); });
+  server_.Post("/api/index", [rest](auto& req, auto& res) { rest->Index(req, res); });
+  server_.Get("/api/stats", [rest](auto& req, auto& res) { rest->Stats(req, res); });
 }
 
 bool HttpServer::Run() {

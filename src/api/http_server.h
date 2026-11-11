@@ -1,9 +1,12 @@
 #pragma once
 
 #include <httplib.h>
+
 #include <memory>
 
 #include "app/config.h"
+#include "index/index_builder.h"
+#include "index/inverted_index.h"
 
 namespace api {
 
@@ -12,6 +15,9 @@ struct Services {
   explicit Services(const app::Config& config);
 
   app::Config config;
+  indexing::IndexHolder holder;
+  indexing::IndexBuilder builder;
+  std::mutex build_mutex;  // index builds run one at a time
 };
 
 // REST server. Connections are served by our own ThreadPool
