@@ -1,20 +1,36 @@
 #include "api/http_server.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <iostream>
 
 #include "api/json_dto.h"
 #include "concurrency/thread_pool.h"
+#include "text/tokenizer.h"
 
 namespace api {
 
 namespace {
 
+using Clock = std::chrono::steady_clock;
 using dto::Json;
+
+int64_t MillisSince(Clock::time_point start) {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
+}
 
 void SendJson(httplib::Response& res, const Json& body, int status = 200) {
   res.status = status;
   res.set_content(body.dump(), "application/json");
+}
+
+std::vector<std::string> QueryTerms(const std::string& query) {
+  std::vector<std::string> terms;
+  text::Tokenizer::Tokenize(query, [&](std::string_view t, size_t) {
+    if (std::find(terms.begin(), terms.end(), t) == terms.end()) terms.emplace_back(t);
+  });
+  return terms;
 }
 
 // cpp-httplib asks a TaskQueue to run each accepted connection.
@@ -29,6 +45,21 @@ class PoolTaskQueue : public httplib::TaskQueue {
  private:
   concurrency::ThreadPool pool_;
 };
+
+// Runs BM25 over a snapshot and attaches snippets.
+Json SearchResults(const Services& s, const indexing::InvertedIndex& index,
+                   const std::vector<search::WeightedTerm>& weighted) {
+  std::vector<std::string> plain;
+  for (const auto& w : weighted) plain.push_back(w.term);
+
+  Json results = Json::array();
+  for (const auto& hit : s.searcher.Search(index, weighted, s.config.top_k)) {
+    const auto& path = index.doc(hit.doc).rel_path;
+    const double score = std::round(hit.score * 1e4) / 1e4;
+    results.push_back(dto::Result(path, score, s.snippets.Extract(path, plain)));
+  }
+  return results;
+}
 
 class RestHandlers {
  public:
@@ -61,6 +92,24 @@ class RestHandlers {
     SendJson(res, dto::Index(st.documents, st.build_time_ms));
   }
 
+  void Search(const httplib::Request& req, httplib::Response& res) {
+    const auto start = Clock::now();
+    const Json body = Json::parse(req.body, nullptr, false);
+    if (!body.is_object() || !body.contains("query") || !body["query"].is_string()) {
+      return SendJson(res, dto::Error("field 'query' (string) is required"), 400);
+    }
+    const std::string mode = body.value("mode", "keyword");
+    if (mode != "keyword") return SendJson(res, dto::Error("unsupported mode: " + mode), 400);
+
+    Json results = Json::array();
+    if (auto index = s_.holder.Get()) {
+      std::vector<search::WeightedTerm> terms;
+      for (auto& t : QueryTerms(body["query"])) terms.push_back({t, 1.0});
+      results = SearchResults(s_, *index, terms);
+    }
+    SendJson(res, dto::Search(std::move(results), MillisSince(start)));
+  }
+
   void Stats(const httplib::Request&, httplib::Response& res) {
     auto index = s_.holder.Get();
     SendJson(res, dto::Stats(index ? index->stats() : indexing::IndexStats{}));
@@ -73,7 +122,9 @@ class RestHandlers {
 }  // namespace
 
 Services::Services(const app::Config& c)
-    : config(c), builder(c.data_dir, c.index_segments, c.index_batch_docs) {}
+    : config(c),
+      builder(c.data_dir, c.index_segments, c.index_batch_docs),
+      snippets(c.data_dir, c.snippet_radius) {}
 
 HttpServer::HttpServer(const app::Config& config) : services_(std::make_unique<Services>(config)) {
   const size_t threads = config.http_threads;
@@ -87,6 +138,7 @@ void HttpServer::RegisterRoutes() {
 
   server_.Get("/api/health", [rest](auto& req, auto& res) { rest->Health(req, res); });
   server_.Post("/api/index", [rest](auto& req, auto& res) { rest->Index(req, res); });
+  server_.Post("/api/search", [rest](auto& req, auto& res) { rest->Search(req, res); });
   server_.Get("/api/stats", [rest](auto& req, auto& res) { rest->Stats(req, res); });
 }
 

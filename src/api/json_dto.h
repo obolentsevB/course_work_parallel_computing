@@ -20,6 +20,14 @@ inline Json Index(size_t documents, int64_t time_ms) {
   return {{"status", "ok"}, {"documents_indexed", documents}, {"time_ms", time_ms}};
 }
 
+inline Json Result(const std::string& doc_id, double score, const std::string& snippet) {
+  return {{"doc_id", doc_id}, {"score", score}, {"snippet", snippet}};
+}
+
+inline Json Search(Json results, int64_t time_ms) {
+  return {{"results", std::move(results)}, {"time_ms", time_ms}};
+}
+
 inline Json Stats(const indexing::IndexStats& s) {
   return {{"documents", s.documents},
           {"index_build_time_ms", s.build_time_ms},

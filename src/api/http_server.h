@@ -7,6 +7,8 @@
 #include "app/config.h"
 #include "index/index_builder.h"
 #include "index/inverted_index.h"
+#include "search/searcher.h"
+#include "search/snippet_extractor.h"
 
 namespace api {
 
@@ -17,6 +19,8 @@ struct Services {
   app::Config config;
   indexing::IndexHolder holder;
   indexing::IndexBuilder builder;
+  search::Searcher searcher;
+  search::SnippetExtractor snippets;
   std::mutex build_mutex;  // index builds run one at a time
 };
 
