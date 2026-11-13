@@ -32,6 +32,7 @@ add_library(search_core STATIC
   src/index/inverted_index.cpp
   src/search/searcher.cpp
   src/search/snippet_extractor.cpp
+  src/search/query_expander.cpp
   src/llm/ollama_client.cpp
   src/api/http_server.cpp
 )
