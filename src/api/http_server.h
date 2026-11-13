@@ -7,6 +7,7 @@
 #include "app/config.h"
 #include "index/index_builder.h"
 #include "index/inverted_index.h"
+#include "llm/ollama_client.h"
 #include "search/searcher.h"
 #include "search/snippet_extractor.h"
 
@@ -21,6 +22,7 @@ struct Services {
   indexing::IndexBuilder builder;
   search::Searcher searcher;
   search::SnippetExtractor snippets;
+  llm::OllamaClient ollama;
   std::mutex build_mutex;  // index builds run one at a time
 };
 

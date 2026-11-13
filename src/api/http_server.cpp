@@ -66,7 +66,7 @@ class RestHandlers {
   explicit RestHandlers(Services& s) : s_(s) {}
 
   void Health(const httplib::Request&, httplib::Response& res) {
-    SendJson(res, dto::Health(false));
+    SendJson(res, dto::Health(s_.ollama.IsAvailable()));
   }
 
   void Index(const httplib::Request& req, httplib::Response& res) {
@@ -124,7 +124,9 @@ class RestHandlers {
 Services::Services(const app::Config& c)
     : config(c),
       builder(c.data_dir, c.index_segments, c.index_batch_docs),
-      snippets(c.data_dir, c.snippet_radius) {}
+      snippets(c.data_dir, c.snippet_radius),
+      ollama(c.ollama_url, c.ollama_model, c.ollama_max_queue,
+             std::chrono::milliseconds(c.ollama_health_ttl_ms)) {}
 
 HttpServer::HttpServer(const app::Config& config) : services_(std::make_unique<Services>(config)) {
   const size_t threads = config.http_threads;
