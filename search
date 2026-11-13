@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# CLI wrapper: ./search "query" | ./search --ws "query" | ./search --index [threads]
+# Uses a locally built binary if present, otherwise runs the CLI inside the
+# running server container (no local compiler needed).
+set -euo pipefail
+cd "$(dirname "$0")"
+if [[ -x build/search ]]; then
+  exec build/search "$@"
+fi
+exec docker compose exec -T server search "$@"

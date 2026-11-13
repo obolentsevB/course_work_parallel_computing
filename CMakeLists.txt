@@ -40,3 +40,7 @@ target_compile_options(search_core PUBLIC -Wall -Wextra)
 
 add_executable(server src/main.cpp)
 target_link_libraries(server PRIVATE search_core)
+
+add_executable(search src/cli/search_cli.cpp)
+target_include_directories(search PRIVATE ${DEPS_DIR})
+target_link_libraries(search PRIVATE Threads::Threads)
