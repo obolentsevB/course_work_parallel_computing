@@ -46,7 +46,7 @@ class PoolTaskQueue : public httplib::TaskQueue {
   concurrency::ThreadPool pool_;
 };
 
-// Runs BM25 over a snapshot and attaches snippets.
+// Runs BM25 over a snapshot and attaches snippets. Shared by REST and WS.
 Json SearchResults(const Services& s, const indexing::InvertedIndex& index,
                    const std::vector<search::WeightedTerm>& weighted) {
   std::vector<std::string> plain;
@@ -119,6 +119,48 @@ class RestHandlers {
   Services& s_;
 };
 
+// One WebSocket connection: each received {"query": ...} runs the pipeline
+// query_expansion -> keyword_search -> done, streaming one message per stage.
+class WsSearchHandler {
+ public:
+  explicit WsSearchHandler(Services& s) : s_(s) {}
+
+  void Handle(const httplib::Request&, httplib::ws::WebSocket& ws) {
+    std::string message;
+    while (ws.read(message) == httplib::ws::ReadResult::Text) {
+      const Json request = Json::parse(message, nullptr, false);
+      if (!request.is_object() || !request.contains("query") || !request["query"].is_string()) {
+        ws.send(dto::Stage("error", {{"message", "field 'query' (string) is required"}}).dump());
+        continue;
+      }
+      const std::string query = request["query"];
+
+      // Stage 1: LLM query expansion (empty list if Ollama is unavailable).
+      const auto deadline = Clock::now() + std::chrono::milliseconds(s_.config.ollama_timeout_ms);
+      const auto expanded = s_.expander.Expand(query, deadline);
+      ws.send(dto::Stage("query_expansion", {{"original", query}, {"expanded_terms", expanded}})
+                  .dump());
+
+      // Stage 2: BM25 search, LLM terms get a lower weight than the user's terms.
+      const auto start = Clock::now();
+      Json results = Json::array();
+      if (auto index = s_.holder.Get()) {
+        std::vector<search::WeightedTerm> terms;
+        for (auto& t : QueryTerms(query)) terms.push_back({t, 1.0});
+        for (auto& t : expanded) terms.push_back({t, s_.config.expansion_weight});
+        results = SearchResults(s_, *index, terms);
+      }
+      ws.send(dto::Stage("keyword_search", {{"results", results}, {"time_ms", MillisSince(start)}})
+                  .dump());
+
+      ws.send(dto::Stage("done", nullptr).dump());
+    }
+  }
+
+ private:
+  Services& s_;
+};
+
 }  // namespace
 
 Services::Services(const app::Config& c)
@@ -126,7 +168,8 @@ Services::Services(const app::Config& c)
       builder(c.data_dir, c.index_segments, c.index_batch_docs),
       snippets(c.data_dir, c.snippet_radius),
       ollama(c.ollama_url, c.ollama_model, c.ollama_max_queue,
-             std::chrono::milliseconds(c.ollama_health_ttl_ms)) {}
+             std::chrono::milliseconds(c.ollama_health_ttl_ms)),
+      expander(ollama, c.max_expanded_terms) {}
 
 HttpServer::HttpServer(const app::Config& config) : services_(std::make_unique<Services>(config)) {
   const size_t threads = config.http_threads;
@@ -137,11 +180,13 @@ HttpServer::HttpServer(const app::Config& config) : services_(std::make_unique<S
 void HttpServer::RegisterRoutes() {
   // Handlers are stateless wrappers over Services, shared by all threads.
   auto rest = std::make_shared<RestHandlers>(*services_);
+  auto ws = std::make_shared<WsSearchHandler>(*services_);
 
   server_.Get("/api/health", [rest](auto& req, auto& res) { rest->Health(req, res); });
   server_.Post("/api/index", [rest](auto& req, auto& res) { rest->Index(req, res); });
   server_.Post("/api/search", [rest](auto& req, auto& res) { rest->Search(req, res); });
   server_.Get("/api/stats", [rest](auto& req, auto& res) { rest->Stats(req, res); });
+  server_.WebSocket("/ws/search", [ws](auto& req, auto& socket) { ws->Handle(req, socket); });
 }
 
 bool HttpServer::Run() {

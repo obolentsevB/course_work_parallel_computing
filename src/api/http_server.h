@@ -8,6 +8,7 @@
 #include "index/index_builder.h"
 #include "index/inverted_index.h"
 #include "llm/ollama_client.h"
+#include "search/query_expander.h"
 #include "search/searcher.h"
 #include "search/snippet_extractor.h"
 
@@ -23,10 +24,11 @@ struct Services {
   search::Searcher searcher;
   search::SnippetExtractor snippets;
   llm::OllamaClient ollama;
+  search::QueryExpander expander;
   std::mutex build_mutex;  // index builds run one at a time
 };
 
-// REST server. Connections are served by our own ThreadPool
+// REST + WebSocket server. Connections are served by our own ThreadPool
 // (plugged into cpp-httplib through PoolTaskQueue).
 class HttpServer {
  public:

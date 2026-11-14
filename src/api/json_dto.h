@@ -34,6 +34,12 @@ inline Json Stats(const indexing::IndexStats& s) {
           {"threads_used", s.threads_used}};
 }
 
+inline Json Stage(const std::string& stage, Json data) {
+  Json message = {{"stage", stage}};
+  if (!data.is_null()) message["data"] = std::move(data);
+  return message;
+}
+
 inline Json Error(const std::string& message) {
   return {{"status", "error"}, {"message", message}};
 }
