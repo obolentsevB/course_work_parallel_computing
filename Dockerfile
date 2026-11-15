@@ -11,5 +11,6 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j"$(n
 # Runtime stage: only binaries and static files.
 FROM ubuntu:24.04
 COPY --from=build /src/build/server /src/build/search /usr/local/bin/
+COPY web /app/web
 EXPOSE 8080
 CMD ["server"]

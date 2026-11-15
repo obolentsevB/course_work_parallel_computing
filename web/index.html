@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parallel Search</title>
+<style>
+  :root { --fg: #1d2330; --muted: #6b7385; --line: #dfe3ea; --accent: #2f5bd3; --ok: #1e8e4f; --bad: #c0392b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, sans-serif; color: var(--fg); background: #f6f7f9; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .bar { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; }
+  input { flex: 1; min-width: 120px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  input[type=number] { flex: 0 0 90px; }
+  button { padding: 8px 16px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .stages { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+  .stage { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  .stage.active { border-color: var(--accent); color: var(--accent); }
+  .stage.done { border-color: var(--ok); color: var(--ok); }
+  .terms { color: var(--muted); font-size: 13px; }
+  .tag { display: inline-block; background: #eef2fb; color: var(--accent); border-radius: 4px; padding: 0 6px; margin: 2px; }
+  .result { border-top: 1px solid var(--line); padding: 10px 0; }
+  .result b { font-family: ui-monospace, monospace; font-size: 13px; }
+  .score { color: var(--muted); font-size: 12px; margin-left: 8px; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Паралельна пошукова система</h1>
+  <div class="bar">
+    <span>Сервер: <span id="health">…</span></span>
+    <span>Ollama: <span id="ollama">…</span></span>
+    <span id="stats"></span>
+  </div>
+
+  <div class="card">
+    <form id="index-form">
+      <input id="threads" type="number" min="1" max="256" value="4" title="Кількість потоків">
+      <button id="index-btn">Побудувати індекс</button>
+      <span id="index-status" class="terms" style="align-self:center"></span>
+    </form>
+  </div>
+
+  <div class="card">
+    <form id="search-form">
+      <input id="query" placeholder="Наприклад: good movies about space" autofocus>
+      <button id="search-btn">Шукати</button>
+    </form>
+    <div class="stages">
+      <span class="stage" data-stage="query_expansion">1. query_expansion</span>
+      <span class="stage" data-stage="keyword_search">2. keyword_search</span>
+      <span class="stage" data-stage="done">3. done</span>
+    </div>
+    <div id="terms" class="terms"></div>
+    <div id="results"></div>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const escape = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+async function refresh() {
+  try {
+    const h = await (await fetch("/api/health")).json();
+    $("health").innerHTML = '<span class="ok">ok</span>';
+    $("ollama").innerHTML = h.ollama ? '<span class="ok">доступна</span>' : '<span class="bad">недоступна</span>';
+    const s = await (await fetch("/api/stats")).json();
+    $("stats").textContent = `Документів: ${s.documents} · побудова: ${s.index_build_time_ms} мс · потоків: ${s.threads_used}`;
+  } catch {
+    $("health").innerHTML = '<span class="bad">недоступний</span>';
+  }
+}
+
+$("index-form").onsubmit = async (e) => {
+  e.preventDefault();
+  $("index-btn").disabled = true;
+  $("index-status").textContent = "Будується…";
+  const res = await fetch("/api/index", { method: "POST", body: JSON.stringify({ threads: Number($("threads").value) }) });
+  const body = await res.json();
+  $("index-status").textContent = res.ok ? `${body.documents_indexed} документів за ${body.time_ms} мс` : body.message;
+  $("index-btn").disabled = false;
+  refresh();
+};
+
+// One WebSocket per query; the server streams one message per pipeline stage.
+$("search-form").onsubmit = (e) => {
+  e.preventDefault();
+  const query = $("query").value.trim();
+  if (!query) return;
+  const stages = document.querySelectorAll(".stage");
+  stages.forEach((el) => (el.className = "stage"));
+  stages[0].classList.add("active");
+  $("terms").textContent = "Розширення запиту через LLM…";
+  $("results").innerHTML = "";
+  $("search-btn").disabled = true;
+
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/search`);
+  ws.onopen = () => ws.send(JSON.stringify({ query }));
+  ws.onmessage = (event) => {
+    const { stage, data } = JSON.parse(event.data);
+    const el = document.querySelector(`[data-stage="${stage}"]`);
+    if (el) { el.className = "stage done"; el.nextElementSibling?.classList.add("active"); }
+    if (stage === "query_expansion") {
+      $("terms").innerHTML = data.expanded_terms.length
+        ? "Додані терми: " + data.expanded_terms.map((t) => `<span class="tag">${escape(t)}</span>`).join("")
+        : "LLM не додала термів (Ollama недоступна або тайм-аут).";
+    } else if (stage === "keyword_search") {
+      $("results").innerHTML = `<p class="terms">Знайдено за ${data.time_ms} мс</p>` +
+        (data.results.map((r) => `<div class="result"><b>${escape(r.doc_id)}</b><span class="score">score ${r.score}</span><div>${escape(r.snippet)}</div></div>`).join("") || "<p>Нічого не знайдено.</p>");
+    } else if (stage === "error") {
+      $("terms").textContent = data.message;
+    }
+    if (stage === "done" || stage === "error") ws.close();
+  };
+  ws.onclose = () => ($("search-btn").disabled = false);
+  ws.onerror = () => ($("terms").textContent = "Помилка WebSocket-з'єднання.");
+};
+
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>

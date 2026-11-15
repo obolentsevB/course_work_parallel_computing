@@ -187,6 +187,7 @@ void HttpServer::RegisterRoutes() {
   server_.Post("/api/search", [rest](auto& req, auto& res) { rest->Search(req, res); });
   server_.Get("/api/stats", [rest](auto& req, auto& res) { rest->Stats(req, res); });
   server_.WebSocket("/ws/search", [ws](auto& req, auto& socket) { ws->Handle(req, socket); });
+  server_.set_mount_point("/", services_->config.web_dir);
 }
 
 bool HttpServer::Run() {
