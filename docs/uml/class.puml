@@ -1,6 +1,5 @@
 @startuml class
-' Діаграма класів. Модель до реалізації: див. docs/PLAN.md, розділ 5.
-' Назви й сигнатури можуть змінитися під час реалізації; синхронізація на етапі 12.
+' Діаграма класів (синхронізовано з кодом у src/).
 skinparam classAttributeIconSize 0
 skinparam packageStyle folder
 hide empty members
@@ -87,12 +86,15 @@ package "index" {
     - total_tokens_ : atomic<uint64_t>
     - avg_doc_length_ : double
     - stats_ : IndexStats
-    + AddDocument(doc : uint32_t, term_freqs) : void
+    + AddDocument(doc : uint32_t, info : DocInfo, term_freqs) : void
     + Finalize(pool : ThreadPool&) : void
     + Lookup(term : string_view, fn : F) : bool
+    + doc(id : uint32_t) : const DocInfo&
     + doc_count() : size_t
+    + term_count() : size_t
     + avg_doc_length() : double
     + stats() : IndexStats
+    + set_stats(stats : IndexStats) : void
   }
 
   class IndexHolder {
@@ -108,7 +110,7 @@ package "index" {
     - batch_docs_ : size_t
     + Build(threads : size_t) : shared_ptr<InvertedIndex>
     - ScanFiles() : vector<string>
-    - ProcessBatch(first : size_t, last : size_t) : void
+    - ProcessBatch(index, files, first : size_t, last : size_t) : void
   }
 }
 
@@ -150,14 +152,17 @@ package "llm" {
     - queue_ : deque<shared_ptr<Job>>
     - mutex_ : mutex
     - cv_ : condition_variable
+    - stopping_ : bool
     - worker_ : thread
     - max_queue_ : size_t
+    - health_mutex_ : mutex
     - available_cache_ : bool
     - checked_at_ : time_point
     + Generate(prompt : string, deadline) : optional<string>
     + IsAvailable() : bool
     + queue_length() : size_t
     - WorkerLoop() : void
+    - Call(prompt : string, deadline) : optional<string>
     - Warmup() : void
   }
 
@@ -179,10 +184,23 @@ package "llm" {
 }
 
 package "api" {
+  class Services <<struct>> {
+    + config : Config
+    + holder : IndexHolder
+    + builder : IndexBuilder
+    + searcher : Searcher
+    + snippets : SnippetExtractor
+    + ollama : OllamaClient
+    + expander : QueryExpander
+    + build_mutex : mutex
+  }
+
   class HttpServer {
+    - services_ : unique_ptr<Services>
     - server_ : httplib::Server
-    + Run(port : int) : void
+    + Run() : bool
     + Stop() : void
+    - RegisterRoutes() : void
   }
 
   class PoolTaskQueue {
@@ -192,7 +210,6 @@ package "api" {
   }
 
   class RestHandlers {
-    - build_mutex_ : mutex
     + Health(req, res) : void
     + Index(req, res) : void
     + Search(req, res) : void
@@ -209,26 +226,33 @@ package "api" {
     + {static} SearchJson(results, time_ms)
     + {static} StatsJson(stats : IndexStats)
     + {static} StageJson(stage, data)
+    + {static} ErrorJson(message)
   }
 }
 
 package "app" {
-  class Config {
+  class Config <<struct>> {
     + data_dir : string
+    + web_dir : string
+    + port : int
     + http_threads : size_t
     + index_segments : size_t
+    + index_batch_docs : size_t
+    + top_k : size_t
     + ollama_url : string
     + ollama_model : string
     + ollama_timeout_ms : int
+    + max_expanded_terms : size_t
+    + expansion_weight : double
     + {static} FromEnv() : Config
   }
 }
 
 package "cli" {
   class SearchCli {
-    + Run(argc : int, argv) : int
-    - SearchRest(query : string) : int
-    - SearchWebSocket(query : string) : int
+    + SearchRest(query : string) : int
+    + SearchWebSocket(query : string) : int
+    + BuildIndex(threads : int) : int
   }
 }
 
@@ -279,21 +303,22 @@ HServer o-- PoolTaskQueue : new_task_queue
 HttpServer --> RestHandlers
 HttpServer --> WsSearchHandler
 
-RestHandlers --> IndexHolder
-RestHandlers --> IndexBuilder
-RestHandlers --> Searcher
-RestHandlers --> SnippetExtractor
-RestHandlers --> OllamaClient : IsAvailable
+HttpServer *-- Services
+Services *-- Config
+Services *-- IndexHolder
+Services *-- IndexBuilder
+Services *-- Searcher
+Services *-- SnippetExtractor
+Services *-- OllamaClient
+Services *-- QueryExpander
+
+RestHandlers --> Services
 RestHandlers ..> JsonDto
 
-WsSearchHandler --> QueryExpander
-WsSearchHandler --> IndexHolder
-WsSearchHandler --> Searcher
-WsSearchHandler --> SnippetExtractor
+WsSearchHandler --> Services
 WsSearchHandler ..> JsonDto
 
 JsonDto ..> OJson
-HttpServer ..> Config
 
 SearchCli ..> HClient
 SearchCli ..> HWsClient
