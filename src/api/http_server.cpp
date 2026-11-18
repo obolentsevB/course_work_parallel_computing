@@ -98,6 +98,9 @@ class RestHandlers {
     if (!body.is_object() || !body.contains("query") || !body["query"].is_string()) {
       return SendJson(res, dto::Error("field 'query' (string) is required"), 400);
     }
+    if (body.contains("mode") && !body["mode"].is_string()) {
+      return SendJson(res, dto::Error("field 'mode' must be a string"), 400);
+    }
     const std::string mode = body.value("mode", "keyword");
     if (mode != "keyword") return SendJson(res, dto::Error("unsupported mode: " + mode), 400);
 
