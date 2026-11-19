@@ -50,6 +50,22 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     args = p.parse_args()
 
+    # Marker of a finished run with these parameters: `docker compose up`
+    # regenerates the dataset only when it is missing, incomplete or resized.
+    os.makedirs(args.out, exist_ok=True)
+    marker = os.path.join(args.out, ".complete")
+    params = f"size_mb={args.size_mb} doc_kb={args.doc_kb} seed={args.seed}"
+    if os.path.exists(marker) and open(marker).read() == params:
+        print(f"dataset already generated in {args.out} ({params})")
+        return
+    # Other parameters: remove documents of an earlier run first.
+    for root, _, files in os.walk(args.out, topdown=False):
+        for name in files:
+            if name.startswith("doc_") and name.endswith(".txt"):
+                os.remove(os.path.join(root, name))
+        if root != args.out and not os.listdir(root):
+            os.rmdir(root)
+
     rng = random.Random(args.seed)
     topics = {k: v.split() for k, v in TOPICS.items()}
     names = list(topics)
@@ -74,6 +90,8 @@ def main():
         doc += 1
         if doc % 5000 == 0:
             print(f"{doc} documents, {written / 2**20:.0f} MB")
+    with open(marker, "w") as f:
+        f.write(params)
     print(f"done: {doc} documents, {written / 2**20:.0f} MB in {args.out}")
 
 
