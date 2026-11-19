@@ -7,6 +7,7 @@ title UC1. Побудова індексу (POST /api/index)
 
 actor "Клієнт" as Client
 participant "RestHandlers" as Rest
+participant "Services" as Svc
 participant "IndexBuilder" as Builder
 participant "pool : ThreadPool\n(threads воркерів)" as Pool
 participant "wg : WaitGroup" as WG
@@ -22,10 +23,12 @@ activate Rest
 alt threads некоректний
   Rest --> Client : 400 {"status": "error", "message": ...}
 else threads коректний або відсутній
-  Rest -> Rest : lock(build_mutex_)
+  Rest -> Svc : BuildIndex(N)
+  activate Svc
+  Svc -> Svc : lock(build_mutex)
   note right : одночасні побудови\nвиконуються по черзі
 
-  Rest -> Builder : Build(N)
+  Svc -> Builder : Build(N)
   activate Builder
   Builder -> Data : рекурсивний обхід, відбір *.txt
   Builder -> Builder : сортування шляхів, doc_id = індекс у списку
@@ -65,14 +68,21 @@ else threads коректний або відсутній
   note right : сортування списків за doc\nпаралельно по сегментах
   Builder -> Pool : Shutdown()
   destroy Pool
-  Builder --> Rest : index
+  Builder --> Svc : index
   deactivate Builder
 
-  Rest -> Holder : Publish(index)
+  Svc -> Holder : Publish(index)
   note right : підміна shared_ptr під м'ютексом;\nпошуки зі старим знімком дороблюють\nна старому індексі
-  Rest -> Rest : unlock(build_mutex_)
+  Svc -> Svc : unlock(build_mutex)
+  Svc --> Rest : index
+  deactivate Svc
   Rest --> Client : 200 {"status": "ok", "documents_indexed": N, "time_ms": T}
 end
 deactivate Rest
+
+note over Svc
+  Той самий Services::BuildIndex викликає HttpServer::Run
+  в окремому потоці одразу після старту (INDEX_ON_START=1).
+end note
 
 @enduml

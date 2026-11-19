@@ -1,5 +1,5 @@
 @startuml deployment
-' Діаграма розгортання (топологія Docker Compose). Модель до реалізації: див. docs/PLAN.md, розділ 4.1.
+' Діаграма розгортання (топологія Docker Compose), синхронізовано з docker-compose.yml.
 
 title Розгортання: docker compose up
 
@@ -13,7 +13,8 @@ node "Комп'ютер (хост)" as Host {
     artifact "./search\n(CLI)" as Cli
   }
 
-  folder "./data\n(датасет, поза git)" as DataDir
+  folder "./data\n(власні *.txt, поза git)" as DataDir
+  folder "./scripts" as ScriptsDir
 
   node "Docker Engine" as Docker {
 
@@ -31,7 +32,12 @@ node "Комп'ютер (хост)" as Host {
       component "ollama pull\n$OLLAMA_MODEL" as Pull
     }
 
+    node "dataset" <<container, одноразовий>> as DatasetC {
+      component "gen_dataset.py\n$DATASET_SIZE_MB" as Gen
+    }
+
     database "том ollama_models" as Models
+    database "том dataset" as DatasetVol
   }
 }
 
@@ -40,11 +46,16 @@ Cli --> ServerBin : HTTP\nlocalhost:8080
 ServerBin --> OllamaSvc : HTTP\nollama:11434\n(мережа compose)
 Pull --> OllamaSvc : HTTP /api/pull
 OllamaSvc --> Models : /root/.ollama
-ServerBin --> DataDir : /data (лише читання)
+ServerBin --> DatasetVol : /data/generated (лише читання)
+ServerBin --> DataDir : /data/local (лише читання)
+Gen --> DatasetVol : /data/generated (запис)
+Gen --> ScriptsDir : /scripts (лише читання)
 ServerBin --> WebDir : статичні файли
 
 legend bottom left
   ollama-init стартує, коли ollama здорова (перевірка: ollama list), завантажує модель і завершується.
+  dataset генерує датасет у том при першому запуску і завершується; наступні запуски пропускають генерацію.
+  server стартує після успішного завершення dataset і одразу будує індекс у фоні (INDEX_ON_START=1).
   server залежить від ollama лише умовою "запущено": /api/health відповідає 200 одразу, поки модель ще завантажується.
   GPU вмикається окремим файлом docker-compose.gpu.yml; основний compose працює без GPU.
 endlegend

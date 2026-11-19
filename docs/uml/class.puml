@@ -193,11 +193,13 @@ package "api" {
     + ollama : OllamaClient
     + expander : QueryExpander
     + build_mutex : mutex
+    + BuildIndex(threads : size_t) : shared_ptr<const InvertedIndex>
   }
 
   class HttpServer {
     - services_ : unique_ptr<Services>
     - server_ : httplib::Server
+    - startup_index_ : thread
     + Run() : bool
     + Stop() : void
     - RegisterRoutes() : void
@@ -238,6 +240,7 @@ package "app" {
     + http_threads : size_t
     + index_segments : size_t
     + index_batch_docs : size_t
+    + index_on_start : bool
     + top_k : size_t
     + ollama_url : string
     + ollama_model : string
