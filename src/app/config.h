@@ -16,6 +16,7 @@ struct Config {
   size_t default_threads = std::thread::hardware_concurrency();
   size_t index_segments = 1024;  // lock stripes of the concurrent hash map
   size_t index_batch_docs = 64;  // documents per thread-pool task
+  bool index_on_start = true;    // build the index once the server starts
   size_t top_k = 10;
   size_t snippet_radius = 120;
   std::string ollama_url = "http://ollama:11434";
@@ -34,6 +35,7 @@ struct Config {
     Read("HTTP_THREADS", c.http_threads);
     Read("INDEX_SEGMENTS", c.index_segments);
     Read("INDEX_BATCH_DOCS", c.index_batch_docs);
+    Read("INDEX_ON_START", c.index_on_start);
     Read("SEARCH_TOP_K", c.top_k);
     Read("SNIPPET_RADIUS", c.snippet_radius);
     Read("OLLAMA_URL", c.ollama_url);

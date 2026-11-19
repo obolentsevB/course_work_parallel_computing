@@ -3,6 +3,7 @@
 #include <httplib.h>
 
 #include <memory>
+#include <thread>
 
 #include "app/config.h"
 #include "index/index_builder.h"
@@ -17,6 +18,9 @@ namespace api {
 // Everything request handlers share. All members are thread-safe or immutable.
 struct Services {
   explicit Services(const app::Config& config);
+
+  // Builds the index and publishes it; builds run one at a time.
+  std::shared_ptr<const indexing::InvertedIndex> BuildIndex(size_t threads);
 
   app::Config config;
   indexing::IndexHolder holder;
@@ -33,6 +37,7 @@ struct Services {
 class HttpServer {
  public:
   explicit HttpServer(const app::Config& config);
+  ~HttpServer();
   bool Run();
   void Stop() { server_.stop(); }
 
@@ -41,6 +46,7 @@ class HttpServer {
 
   std::unique_ptr<Services> services_;
   httplib::Server server_;
+  std::thread startup_index_;  // INDEX_ON_START build
 };
 
 }  // namespace api

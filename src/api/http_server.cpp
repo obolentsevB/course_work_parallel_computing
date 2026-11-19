@@ -83,12 +83,7 @@ class RestHandlers {
       }
     }
 
-    std::lock_guard lock(s_.build_mutex);
-    std::shared_ptr<const indexing::InvertedIndex> index = s_.builder.Build(threads);
-    s_.holder.Publish(index);
-    const auto& st = index->stats();
-    std::cout << "index built: " << st.documents << " docs, " << index->term_count() << " terms, "
-              << st.build_time_ms << " ms, " << st.threads_used << " threads" << std::endl;
+    const auto& st = s_.BuildIndex(threads)->stats();
     SendJson(res, dto::Index(st.documents, st.build_time_ms));
   }
 
@@ -174,6 +169,16 @@ Services::Services(const app::Config& c)
              std::chrono::milliseconds(c.ollama_health_ttl_ms)),
       expander(ollama, c.max_expanded_terms) {}
 
+std::shared_ptr<const indexing::InvertedIndex> Services::BuildIndex(size_t threads) {
+  std::lock_guard lock(build_mutex);
+  std::shared_ptr<const indexing::InvertedIndex> index = builder.Build(threads);
+  holder.Publish(index);
+  const auto& st = index->stats();
+  std::cout << "index built: " << st.documents << " docs, " << index->term_count() << " terms, "
+            << st.build_time_ms << " ms, " << st.threads_used << " threads" << std::endl;
+  return index;
+}
+
 HttpServer::HttpServer(const app::Config& config) : services_(std::make_unique<Services>(config)) {
   const size_t threads = config.http_threads;
   server_.new_task_queue = [threads] { return new PoolTaskQueue(threads); };
@@ -193,8 +198,17 @@ void HttpServer::RegisterRoutes() {
   server_.set_mount_point("/", services_->config.web_dir);
 }
 
+HttpServer::~HttpServer() {
+  if (startup_index_.joinable()) startup_index_.join();
+}
+
 bool HttpServer::Run() {
   const auto& c = services_->config;
+  if (c.index_on_start) {
+    // Build in the background, so /api/health answers while documents are being read.
+    startup_index_ =
+        std::thread([this] { services_->BuildIndex(services_->config.default_threads); });
+  }
   std::cout << "listening on :" << c.port << " (http threads: " << c.http_threads
             << ", data: " << c.data_dir << ", ollama: " << c.ollama_url << " " << c.ollama_model
             << ")" << std::endl;
