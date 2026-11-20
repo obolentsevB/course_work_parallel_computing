@@ -5,7 +5,6 @@ import csv
 import http.client
 import json
 import os
-import socket
 import statistics
 import threading
 import time
@@ -25,19 +24,9 @@ def request(conn, method, path, body=None):
     return json.loads(data)
 
 
-class NoDelayConnection(http.client.HTTPConnection):
-    """http.client sends request headers and body in two writes. With Nagle's
-    algorithm on, the body waits for the server's delayed ACK (~40 ms), which
-    would be measured as search latency. TCP_NODELAY sends it at once."""
-
-    def connect(self):
-        super().connect()
-        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
-
 def connect(url, timeout=3600):
     u = urlparse(url)
-    return NoDelayConnection(u.hostname, u.port or 80, timeout=timeout)
+    return http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
 
 
 def powers_of_two(limit):
@@ -68,22 +57,20 @@ def bench_throughput(url, max_clients, seconds):
     rows = []
     for clients in powers_of_two(max_clients):
         stop = time.monotonic() + seconds
-        counts, latencies, server_ms = [0] * clients, [], []
+        counts, latencies = [0] * clients, []
         lock = threading.Lock()
 
         def client(i):
             conn = connect(url, timeout=60)
-            local, local_server = [], []
+            local = []
             while time.monotonic() < stop:
                 q = QUERIES[(i + counts[i]) % len(QUERIES)]
                 started = time.perf_counter()
-                answer = request(conn, "POST", "/api/search", {"query": q, "mode": "keyword"})
+                request(conn, "POST", "/api/search", {"query": q, "mode": "keyword"})
                 local.append((time.perf_counter() - started) * 1000)
-                local_server.append(answer["time_ms"])
                 counts[i] += 1
             with lock:
                 latencies.extend(local)
-                server_ms.extend(local_server)
 
         threads = [threading.Thread(target=client, args=(i,)) for i in range(clients)]
         for t in threads:
@@ -92,11 +79,9 @@ def bench_throughput(url, max_clients, seconds):
             t.join()
         rps = sum(counts) / seconds
         rows.append({"clients": clients, "rps": round(rps, 1),
-                     "latency_ms": round(statistics.mean(latencies), 2),
-                     "server_ms": round(statistics.mean(server_ms), 2)})
+                     "latency_ms": round(statistics.mean(latencies), 2)})
         print(f"search clients={clients:3d}  throughput={rps:8.1f} req/s  "
-              f"avg latency={rows[-1]['latency_ms']} ms  "
-              f"(server processing {rows[-1]['server_ms']} ms)")
+              f"avg latency={rows[-1]['latency_ms']} ms")
     return rows
 
 
@@ -130,38 +115,31 @@ def plot(index_rows, tp_rows, out):
     a.set_xticks(p, labels=[str(x) for x in p])
     a.grid(alpha=.3)
     b.plot(p, [r["speedup"] for r in index_rows], "o-", label="Фактичне")
-    # More threads than logical cores cannot run at once, so the ideal is min(p, cores).
-    cores = os.cpu_count()
-    b.plot(p, [min(x, cores) for x in p], "--", color="gray",
-           label=f"Ідеальне: min(p, {cores} лог. ядер)")
+    b.plot(p, p, "--", color="gray", label="Ідеальне (лінійне)")
     b.set(title="Прискорення S = T1 / Tp", xlabel="Кількість потоків", ylabel="S")
-    b.set_xscale("log", base=2)
-    b.set_xticks(p, labels=[str(x) for x in p])
     b.legend()
     b.grid(alpha=.3)
     fig.tight_layout()
     fig.savefig(os.path.join(out, "index_time_vs_threads.png"), dpi=150)
 
-    fig, (ax, lx) = plt.subplots(1, 2, figsize=(11, 4))
+    fig, ax = plt.subplots(figsize=(6, 4))
     c = [r["clients"] for r in tp_rows]
     ax.plot(c, [r["rps"] for r in tp_rows], "o-")
     ax.set(title="Пропускна здатність пошуку", xlabel="Кількість одночасних клієнтів",
            ylabel="Запитів / с")
-    lx.plot(c, [r["latency_ms"] for r in tp_rows], "o-", label="Затримка на клієнті")
-    lx.plot(c, [r["server_ms"] for r in tp_rows], "s--", label="Обробка на сервері (time_ms)")
-    lx.set(title="Затримка запиту", xlabel="Кількість одночасних клієнтів", ylabel="мс")
-    lx.legend()
-    for axis in (ax, lx):
-        axis.set_xscale("log", base=2)
-        axis.set_xticks(c, labels=[str(x) for x in c])
-        axis.grid(alpha=.3)
+    ax.set_xscale("log", base=2)
+    ax.set_xticks(c, labels=[str(x) for x in c])
+    ax.grid(alpha=.3)
     fig.tight_layout()
     fig.savefig(os.path.join(out, "throughput_vs_clients.png"), dpi=150)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--url", default="http://localhost:8080")
+    # 127.0.0.1, not localhost: on Windows localhost resolves to IPv6 ::1 first, and
+    # Docker Desktop's IPv6 port forwarding delays every request by ~40 ms because
+    # http.client writes the request headers and body separately.
+    ap.add_argument("--url", default="http://127.0.0.1:8080")
     ap.add_argument("--max-threads", type=int, default=os.cpu_count())
     ap.add_argument("--max-clients", type=int, default=32)
     ap.add_argument("--repeats", type=int, default=3)
