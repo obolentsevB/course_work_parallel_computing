@@ -100,7 +100,7 @@ def sample_queries(url):
 
 
 def save_csv(path, rows):
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
@@ -166,7 +166,7 @@ def main():
     tp_rows = bench_throughput(args.url, args.max_clients, args.seconds)
     save_csv(os.path.join(args.out, "index_time.csv"), index_rows)
     save_csv(os.path.join(args.out, "throughput.csv"), tp_rows)
-    with open(os.path.join(args.out, "sample_queries.md"), "w") as f:
+    with open(os.path.join(args.out, "sample_queries.md"), "w", encoding="utf-8") as f:
         f.write(sample_queries(args.url) + "\n")
     plot(index_rows, tp_rows, args.out)
     print(f"results saved to {args.out}/")
