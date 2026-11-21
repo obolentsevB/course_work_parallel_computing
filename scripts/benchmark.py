@@ -41,7 +41,10 @@ def bench_index(url, max_threads, repeats):
     conn = connect(url)
     request(conn, "POST", "/api/index", {"threads": max_threads})  # warm the page cache
     rows = []
-    for p in powers_of_two(max_threads):
+    # Powers of two plus the number of logical cores, where the speedup should peak.
+    cores = os.cpu_count()
+    thread_counts = sorted(set(powers_of_two(max_threads)) | ({cores} if cores < max_threads else set()))
+    for p in thread_counts:
         times = [request(conn, "POST", "/api/index", {"threads": p})["time_ms"] for _ in range(repeats)]
         t = statistics.median(times)
         rows.append({"threads": p, "time_ms": t})
