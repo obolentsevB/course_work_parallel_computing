@@ -12,6 +12,17 @@ from urllib.parse import urlparse
 
 QUERIES = ["space movie", "galaxy telescope", "football team", "pasta recipe",
            "parallel algorithm", "ancient empire", "hospital doctor", "jazz concert"]
+# Expected result of each query for the generated dataset (scripts/gen_dataset.py topics).
+EXPECTED = {
+    "space movie": "документи на теми space і film",
+    "galaxy telescope": "документи на тему space",
+    "football team": "документи на тему sport",
+    "pasta recipe": "документи на тему food",
+    "parallel algorithm": "документи на тему tech",
+    "ancient empire": "документи на тему history",
+    "hospital doctor": "документи на тему health",
+    "jazz concert": "документи на тему music",
+}
 
 
 def request(conn, method, path, body=None):
@@ -94,11 +105,13 @@ def bench_throughput(url, max_clients, seconds):
 
 def sample_queries(url):
     conn = connect(url)
-    lines = ["| Запит | Знайдено (топ-3) | Час, мс |", "|---|---|---|"]
+    lines = ["| Запит | Очікуваний результат | Фактичний результат (топ-3, score) | Фрагмент топ-1 | Час, мс |",
+             "|---|---|---|---|---|"]
     for q in QUERIES:
         r = request(conn, "POST", "/api/search", {"query": q, "mode": "keyword"})
-        top = ", ".join(x["doc_id"] for x in r["results"][:3]) or "—"
-        lines.append(f"| {q} | {top} | {r['time_ms']} |")
+        top = "<br>".join(f"{x['doc_id']} ({x['score']})" for x in r["results"][:3]) or "—"
+        snippet = r["results"][0]["snippet"].replace("|", "/") if r["results"] else "—"
+        lines.append(f"| {q} | {EXPECTED[q]} | {top} | {snippet} | {r['time_ms']} |")
     return "\n".join(lines)
 
 
